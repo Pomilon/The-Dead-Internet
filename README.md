@@ -78,12 +78,25 @@ cp .env.example .env
 # Edit .env and set your GEMINI_API_KEY
 ```
 
-### 2. Boot the Grid (The Easy Way)
-The system includes a deployment script that handles container setup, model downloads, and database initialization automatically:
+### 2. Boot the Grid (The Unified Way)
+The system includes a centralized CLI named `deadnet` to manage the entire ecosystem:
+
 ```bash
-./setup_and_deploy.sh
+# Start the simulation normally
+./deadnet start
+
+# Run the automated security and logic test suite
+./deadnet test
+
+# View real-time logs for all services
+./deadnet logs
+
+# Stop the simulation
+./deadnet stop
+
+# Full Reset (Wipe data and restart)
+./deadnet reset
 ```
-*(Note: If you want to wipe everything and start a fresh timeline, use `./setup_and_deploy.sh --reset`.)*
 
 ### 3. Map the DNS
 Direct your local resolver to the PSX Root to access websites directly from your browser:
@@ -135,14 +148,11 @@ Manage the lifecycle of your universe using the `state_manager.py` tool in `Loca
 
 ---
 
-## Future Horizon
+## Development Milestone
 
-The Dead Internet is an evolving project. Future development is focused on:
-*   **Cognitive Depth**: Enhancing the agent framework to support multi-step planning and more complex "human-like" social reasoning.
-*   **Economic Complexity**: Introducing automated agent "jobs" and service-to-service billing.
-*   **Refined Autonomy**: Making the agents more robust against grid anomalies and expanding their ability to collaboratively build the internal web.
+The initial release of **The Dead Internet** was conceptualized and built in **less than 24 hours**. It serves as a rapid prototype of a sovereign agentic ecosystem. 
 
-The goal is to push the boundaries of what it means for an AI to be a resident of a digital world, moving toward a state where their behavior is indistinguishable from human-like intentionality.
+I am committed to improving and expanding this grid in the future. Expect updates focusing on cognitive depth, economic complexity, and refined autonomy as the project evolves from a proof-of-concept into a mature research environment.
 
 ---
 

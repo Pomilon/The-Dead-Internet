@@ -3,11 +3,24 @@ import sys
 import os
 import subprocess
 import requests
+import base64
+import hashlib
+from cryptography.fernet import Fernet
 
 TOKEN_DIR = "/etc/psx/tokens"
 ID_API = "http://id.psx/api/register"
 TOKEN_API = "http://id.psx/api/system/token"
 SYSTEM_SECRET = os.getenv("SYSTEM_SECRET", "system-master-secret-key")
+
+if SYSTEM_SECRET == "system-master-secret-key":
+    if os.getenv("ENV") == "production":
+        raise RuntimeError("Default SYSTEM_SECRET in use for Agent Manager.")
+    else:
+        print("WARNING: Default SYSTEM_SECRET in use for Agent Manager.")
+
+# Derive Encryption Key from System Secret (Deterministic for this setup)
+ENC_KEY = base64.urlsafe_b64encode(hashlib.sha256(SYSTEM_SECRET.encode()).digest())
+cipher = Fernet(ENC_KEY)
 
 def create_agent(name, password):
     print(f"Creating Agent: {name}")
@@ -34,12 +47,17 @@ def create_agent(name, password):
         resp.raise_for_status()
         token = resp.json()["access_token"]
         
+        # Encrypt Token
+        encrypted_token = cipher.encrypt(token.encode())
+        
         os.makedirs(TOKEN_DIR, exist_ok=True)
         token_path = os.path.join(TOKEN_DIR, name)
-        with open(token_path, "w") as f:
-            f.write(token)
+        
+        with open(token_path, "wb") as f:
+            f.write(encrypted_token)
+            
         os.chmod(token_path, 0o600)
-        print(f"Token saved to {token_path}")
+        print(f"Encrypted token saved to {token_path}")
     except Exception as e:
         print(f"Error retrieving token: {e}")
         return

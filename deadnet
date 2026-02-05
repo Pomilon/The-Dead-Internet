@@ -1,0 +1,209 @@
+#!/bin/bash
+set -e
+
+# Configuration
+COMPOSE_FILE="LocalInternet/docker-compose.yml"
+TEST_COMPOSE_FILE="LocalInternet/docker-compose.test.yml"
+ENV_FILE=".env"
+
+# Colors
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+function check_env() {
+    if [ ! -f "$ENV_FILE" ]; then
+        if [ -f ".env.example" ]; then
+            echo -e "${YELLOW}⚠️  .env file not found. Creating from .env.example...${NC}"
+            cp .env.example .env
+            # Generate secure secrets
+            S1=$(openssl rand -hex 32)
+            S2=$(openssl rand -hex 32)
+            S3=$(openssl rand -hex 32)
+            sed -i "s/dead-internet-secret-key-change-me/$S1/g" .env
+            sed -i "s/system-master-secret-key/$S2/g" .env
+            sed -i "s/system-aether-key/$S3/g" .env
+            echo -e "${GREEN}✅ Created .env with generated secrets.${NC}"
+            echo -e "${YELLOW}⚠️  Please edit .env and set your GEMINI_API_KEY if you haven't already!${NC}"
+        else
+            echo -e "${RED}❌ .env.example not found! Cannot create config.${NC}"
+            exit 1
+        fi
+    fi
+}
+
+function print_usage() {
+    echo "Usage: ./deadnet [command]"
+    echo ""
+    echo "Commands:"
+    echo "  start       Start the simulation in normal mode"
+    echo "  test        Start the environment in test mode and run the test suite"
+    echo "  stop        Stop all containers and remove networks"
+    echo "  restart     Restart the simulation (stop + start)"
+    echo "  reset       ⚠️  WIPE ALL DATA and restart fresh"
+    echo "  logs [svc]  View logs (optional: specify service name, e.g., dead-id)"
+    echo "  shell [svc] Open a shell inside a service container"
+    echo "  help        Show this help message"
+}
+
+function init_db() {
+    echo -e "${BLUE}⏳ Waiting for database to be healthy...${NC}"
+    # Wait loop
+    MAX_RETRIES=30
+    COUNT=0
+    until [ "$(docker inspect -f '{{.State.Health.Status}}' dead-postgres 2>/dev/null)" == "healthy" ]; do
+        sleep 2
+        COUNT=$((COUNT+1))
+        if [ $COUNT -ge $MAX_RETRIES ]; then
+            echo -e "${RED}❌ Database failed to become healthy.${NC}"
+            return
+        fi
+    done
+    
+    echo -e "${GREEN}✅ Database is healthy. Initializing schemas...${NC}"
+    # Create Forgejo DB if it doesn't exist
+    docker exec dead-postgres psql -U admin -d postgres -c "CREATE DATABASE forgejo;" 2>/dev/null || true
+}
+
+function download_models() {
+    if [ -f "LocalInternet/download_model.py" ]; then
+        # Check if cache already exists to avoid redundant messages
+        if [ ! -d "LocalInternet/data/nexus_cache/models" ]; then
+            echo -e "${BLUE}📥 Downloading Nexus semantic model (first time setup)...${NC}"
+            # Ensure fastembed is installed on host for the downloader
+            pip install fastembed -q || true
+            cd LocalInternet && python3 download_model.py && cd ..
+        fi
+    fi
+}
+
+function cmd_start() {
+    check_env
+    download_models
+    echo -e "${BLUE}🚀 Starting Dead Internet Simulation (Normal Mode)...${NC}"
+    docker-compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build
+    
+    init_db
+    
+    echo -e "${GREEN}✅ Simulation running.${NC}"
+    echo "   MCP Server: http://localhost:8000/see (or http://mcp.psx/sse if you mapped the dns)"
+}
+
+function cmd_reset() {
+    echo -e "${RED}⚠️  WARNING: This will delete ALL data (databases, repos, memories).${NC}"
+    read -p "Are you sure? (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Aborted."
+        exit 1
+    fi
+
+    cmd_stop
+    
+    echo -e "${BLUE}🧹 Cleaning up data directories...${NC}"
+    sudo rm -rf LocalInternet/data
+    mkdir -p LocalInternet/data
+    sudo rm -rf AgentsFramework/data
+    mkdir -p AgentsFramework/data
+    
+    # Restore default DNS zone
+    if [ -f "LocalInternet/dns/db.psx.example" ]; then
+        cp LocalInternet/dns/db.psx.example LocalInternet/dns/db.psx
+    fi
+
+    echo -e "${BLUE}📥 Re-verifying Models (Nexus)...${NC}"
+    download_models
+
+    cmd_start
+}
+
+function cmd_test() {
+    check_env
+    echo -e "${BLUE}🧪 Starting Dead Internet Simulation (Test Mode)...${NC}"
+    
+    # Start with test overrides
+    docker-compose --env-file "$ENV_FILE" \
+        -f "$COMPOSE_FILE" \
+        -f "$TEST_COMPOSE_FILE" \
+        up -d --build
+
+    echo -e "${BLUE}⏳ Waiting for services to stabilize (15s)...${NC}"
+    sleep 15
+
+    echo -e "${BLUE}🏃 Running Containerized Tests...${NC}"
+
+    echo "🔹 [ID Service] Running Password & Rate Limit Tests..."
+    docker exec dead-id pytest /tests/test_id.py -v
+
+    echo "🔹 [Aether Service] Running Domain Validation Tests..."
+    docker exec dead-aether pytest /tests/test_aether.py -v
+
+    echo "🔹 [Compute Service] Running Token Encryption Tests..."
+    docker exec dead-compute pytest /tests/test_compute.py -v
+
+    echo "🔒 Running Security Scan (Bandit) on ID Service..."
+    docker exec dead-id bandit -r /app -ll -s B101,B104
+
+    echo -e "${GREEN}✅ All Containerized Checks Passed!${NC}"
+}
+
+function cmd_stop() {
+    echo -e "${BLUE}🛑 Stopping Dead Internet Simulation...${NC}"
+    # Attempt to down both configurations to catch any stragglers
+    docker-compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" -f "$TEST_COMPOSE_FILE" down --remove-orphans 2>/dev/null || \
+    docker-compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" down --remove-orphans
+    echo -e "${GREEN}✅ Environment stopped.${NC}"
+}
+
+function cmd_logs() {
+    if [ -z "$1" ]; then
+        docker-compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" logs -f
+    else
+        SERVICE=$1
+        if [[ "$SERVICE" != dead-* ]]; then
+            docker-compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" logs -f "$SERVICE"
+        else
+            docker logs -f "$SERVICE"
+        fi
+    fi
+}
+
+function cmd_shell() {
+    if [ -z "$1" ]; then
+        echo "Error: Service name required (e.g., ./deadnet shell id)"
+        exit 1
+    fi
+    docker-compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" exec "$1" /bin/bash 2>/dev/null || \
+    docker-compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" exec "$1" /bin/sh
+}
+
+# Main Dispatch
+case "$1" in
+    start)
+        cmd_start
+        ;;
+    test)
+        cmd_test
+        ;;
+    stop)
+        cmd_stop
+        ;;
+    restart)
+        cmd_stop
+        cmd_start
+        ;;
+    reset)
+        cmd_reset
+        ;;
+    logs)
+        cmd_logs "$2"
+        ;;
+    shell)
+        cmd_shell "$2"
+        ;;
+    help|*)
+        print_usage
+        ;;
+esac

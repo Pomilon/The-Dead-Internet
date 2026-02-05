@@ -1,0 +1,21 @@
+services:
+  id:
+    build:
+      context: ./services/id
+      dockerfile: Dockerfile.test
+    volumes:
+      - ./services/tests:/tests
+
+  aether:
+    build:
+      context: ./services/aether
+      dockerfile: Dockerfile.test
+    volumes:
+      - ./services/tests:/tests
+
+  compute:
+    build:
+      context: ./services/compute
+      dockerfile: Dockerfile.test
+    volumes:
+      - ./services/tests:/tests

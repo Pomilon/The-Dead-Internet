@@ -16,10 +16,13 @@ RUN pip3 install aiohttp requests
 WORKDIR /app
 COPY requirements.txt .
 RUN pip3 install -r requirements.txt
+RUN pip3 install pytest bandit cryptography
+
 COPY app/ /app/
 RUN chmod +x /app/agent_manager.py /app/start.sh
 
 # Install the PSX Browser Library globally
+# Note: Ubuntu 22.04 uses python3.10
 RUN cp /app/psx.py /usr/local/lib/python3.10/dist-packages/psx.py
 
 # Create 'web' CLI tool
@@ -30,3 +33,4 @@ RUN mkdir -p /etc/psx/tokens && chmod 700 /etc/psx/tokens
 
 # Start services
 CMD ["/app/start.sh"]
+

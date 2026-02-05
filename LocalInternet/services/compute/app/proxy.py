@@ -4,11 +4,19 @@ import aiohttp
 from aiohttp import web
 import pwd
 import json
+import base64
+import hashlib
+from cryptography.fernet import Fernet
 
 # Config
 TOKEN_DIR = "/etc/psx/tokens"
 ID_SERVICE = "http://id.psx"
 BASE_PORT = 10000 # Agents will have proxy at 10000 + UID
+SYSTEM_SECRET = os.getenv("SYSTEM_SECRET", "system-master-secret-key")
+
+# Encryption Setup
+ENC_KEY = base64.urlsafe_b64encode(hashlib.sha256(SYSTEM_SECRET.encode()).digest())
+cipher = Fernet(ENC_KEY)
 
 async def proxy_handler(request):
     # Identify which port the request came in on
@@ -28,8 +36,14 @@ async def proxy_handler(request):
     if not os.path.exists(token_path):
         return web.Response(status=401, text=f"Unauthorized: No token found for {username}")
 
-    with open(token_path, "r") as f:
-        token = f.read().strip()
+    # Decrypt Token
+    try:
+        with open(token_path, "rb") as f:
+            encrypted_token = f.read()
+        token = cipher.decrypt(encrypted_token).decode('utf-8')
+    except Exception as e:
+        print(f"Token decryption failed for {username}: {e}")
+        return web.Response(status=500, text="Internal Error: Token corruption")
 
     # Forward Request
     url = str(request.url)

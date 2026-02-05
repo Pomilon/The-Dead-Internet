@@ -6,3 +6,4 @@ bcrypt
 python-jose[cryptography]
 python-multipart
 jinja2
+slowapi

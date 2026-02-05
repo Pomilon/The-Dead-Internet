@@ -2,6 +2,8 @@ from fastapi import FastAPI, Depends, Request, Form, HTTPException, Path
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, desc, func
 from sqlalchemy.orm import sessionmaker, Session
 from jose import jwt, JWTError
@@ -36,10 +38,24 @@ def seed_db():
 seed_db()
 
 app = FastAPI()
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["echo.psx", "localhost", "127.0.0.1"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://*.psx", "http://localhost"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
 templates = Jinja2Templates(directory="templates")
 
 # SHARED SECRET
 SECRET_KEY = os.getenv("SECRET_KEY", "dead-internet-secret-key-change-me")
+if SECRET_KEY == "dead-internet-secret-key-change-me":
+    if os.getenv("ENV") == "production":
+        raise RuntimeError("Default SECRET_KEY in use for Social Service.")
+    else:
+        print("WARNING: Default SECRET_KEY in use for Social Service.")
+
 ALGORITHM = "HS256"
 
 def get_db():
@@ -104,6 +120,10 @@ async def create_frequency(request: Request, name: str = Form(...), description:
     # Validate name (simple alphanumeric check)
     if not name.isalnum():
         raise HTTPException(status_code=400, detail="Frequency name must be alphanumeric.")
+    if len(name) > 50:
+         raise HTTPException(status_code=400, detail="Frequency name too long (max 50).")
+    if len(description) > 500:
+         raise HTTPException(status_code=400, detail="Description too long (max 500).")
     
     existing = db.query(models.Subreddit).filter(models.Subreddit.name == name).first()
     if existing:
@@ -190,6 +210,11 @@ async def submit_page(request: Request, db: Session = Depends(get_db)):
 async def submit_post(request: Request, title: str = Form(...), content: str = Form(...), frequency: str = Form(...), db: Session = Depends(get_db)):
     user = get_current_user(request)
     if not user: return RedirectResponse("/login")
+    
+    if len(title) > 300:
+         raise HTTPException(status_code=400, detail="Title too long (max 300).")
+    if len(content) > 10000:
+         raise HTTPException(status_code=400, detail="Content too long (max 10000).")
     
     sub = db.query(models.Subreddit).filter(models.Subreddit.name == frequency).first()
     if not sub:
@@ -328,7 +353,7 @@ def callback(code: str, response: HTMLResponse):
             key="social_session",
             value=data["access_token"],
             httponly=True,
-            samesite="lax",
+            samesite="strict",
             max_age=data.get("expires_in", 3600)
         )
         return response

@@ -158,9 +158,17 @@ async def call_tool(name: str, arguments: dict):
             import subprocess
             import tempfile
             import shutil
+            import re
             
             repo_name = arguments["repo_name"]
+            if not re.match(r"^[a-zA-Z0-9_-]+$", repo_name):
+                 return [TextContent(type="text", text="ERROR: Invalid repo_name format")]
+
             files = arguments["files"]
+            for path in files.keys():
+                if ".." in path or path.startswith("/") or "\\" in path:
+                     return [TextContent(type="text", text=f"ERROR: Invalid file path {path}")]
+
             commit_message = arguments.get("commit_message", "Automated update from Agent")
             
             user_info = requests.get("http://id.psx/userinfo", headers=headers, timeout=5).json()

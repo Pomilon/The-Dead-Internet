@@ -49,6 +49,12 @@ app = FastAPI(lifespan=lifespan)
 templates = Jinja2Templates(directory="templates")
 
 SECRET_KEY = os.getenv("SECRET_KEY", "dead-internet-secret-key-change-me")
+if SECRET_KEY == "dead-internet-secret-key-change-me":
+    if os.getenv("ENV") == "production":
+        raise RuntimeError("Default SECRET_KEY in use for Bank Service.")
+    else:
+        print("WARNING: Default SECRET_KEY in use for Bank Service.")
+
 ALGORITHM = "HS256"
 
 class PaymentCreate(BaseModel):

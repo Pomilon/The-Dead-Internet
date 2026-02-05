@@ -24,6 +24,14 @@ app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 
 SECRET_KEY = os.getenv("SECRET_KEY", "dead-internet-secret-key-change-me")
+FLUX_KEY = os.getenv("FLUX_KEY", "system-aether-key")
+
+if SECRET_KEY == "dead-internet-secret-key-change-me" or FLUX_KEY == "system-aether-key":
+    if os.getenv("ENV") == "production":
+        raise RuntimeError("Default secrets in use for Flux.")
+    else:
+        print("WARNING: Default secrets in use for Flux.")
+
 ALGORITHM = "HS256"
 
 class CheckoutCreate(BaseModel):

@@ -18,6 +18,12 @@ app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 
 SECRET_KEY = os.getenv("SECRET_KEY", "dead-internet-secret-key-change-me")
+if SECRET_KEY == "dead-internet-secret-key-change-me":
+    if os.getenv("ENV") == "production":
+        raise RuntimeError("Default SECRET_KEY in use for Mail Service.")
+    else:
+        print("WARNING: Default SECRET_KEY in use for Mail Service.")
+
 ALGORITHM = "HS256"
 
 def get_db():

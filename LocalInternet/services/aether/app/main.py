@@ -1,6 +1,8 @@
 from fastapi import FastAPI, Depends, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from jose import jwt, JWTError
@@ -9,6 +11,7 @@ import requests
 import models
 import subprocess
 import shutil
+import re
 
 # DB Setup
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:password@postgres:5432/psx_core")
@@ -17,13 +20,36 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["aether.psx", "localhost", "127.0.0.1"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://*.psx", "http://localhost"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
 templates = Jinja2Templates(directory="templates")
 
 SECRET_KEY = os.getenv("SECRET_KEY", "dead-internet-secret-key-change-me")
-ALGORITHM = "HS256"
 FLUX_KEY = os.getenv("FLUX_KEY", "system-aether-key")
+
+if SECRET_KEY == "dead-internet-secret-key-change-me" or FLUX_KEY == "system-aether-key":
+    if os.getenv("ENV") == "production":
+        raise RuntimeError("Default secrets in use for Aether.")
+    else:
+        print("WARNING: Default secrets in use for Aether.")
+
+ALGORITHM = "HS256"
 HOSTED_SITES_DIR = "/hosted_sites"
 ZONE_FILE = "/etc/coredns/db.psx"
+DOMAIN_REGEX = re.compile(r'^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.psx)?$')
+
+def validate_domain(domain: str) -> str:
+    if not DOMAIN_REGEX.match(domain):
+        raise HTTPException(400, "Invalid domain format")
+    if ".." in domain or "/" in domain or "\\" in domain:
+         raise HTTPException(400, "Invalid domain format")
+    return domain
 
 def increment_dns_serial():
     if not os.path.exists(ZONE_FILE): return
@@ -133,6 +159,10 @@ async def purchase_domain(request: Request, domain: str = Form(...), db: Session
     if not user: return RedirectResponse("/login")
     
     if not domain.endswith(".psx"): domain += ".psx"
+    try:
+        validate_domain(domain)
+    except HTTPException:
+        return RedirectResponse(f"/?error=Invalid domain format")
     
     existing = db.query(models.Domain).filter(models.Domain.domain_name == domain).first()
     if existing: return RedirectResponse(f"/?error=Domain {domain} is already registered.")
@@ -161,6 +191,11 @@ async def confirm_domain(d: str, db: Session = Depends(get_db), request: Request
     user = get_current_user(request)
     if not user: return RedirectResponse("/login")
     
+    try:
+        validate_domain(d)
+    except:
+        return RedirectResponse("/?error=invalid_domain")
+    
     subdomain = d.replace(".psx", "")
     
     exists = db.query(models.Domain).filter(models.Domain.domain_name == d).first()
@@ -168,6 +203,10 @@ async def confirm_domain(d: str, db: Session = Depends(get_db), request: Request
 
     try:
         # 1. Update DNS Zone
+        # Sanity check subdomain again (alphanumeric only)
+        if not re.match(r'^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$', subdomain):
+             return RedirectResponse("/?error=invalid_subdomain_format")
+
         with open(ZONE_FILE, "a") as f:
             f.write(f"{subdomain:<8} IN  A   10.5.0.15\n")
         increment_dns_serial()
@@ -186,6 +225,10 @@ async def update_domain_ip(request: Request, domain_id: int = Form(...), new_ip:
     user = get_current_user(request)
     if not user: return RedirectResponse("/login")
     
+    # Simple IP validation
+    if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", new_ip):
+         raise HTTPException(400, "Invalid IP address format")
+
     domain = db.query(models.Domain).filter(models.Domain.id == domain_id, models.Domain.user == user).first()
     if not domain: raise HTTPException(404)
 
@@ -196,7 +239,9 @@ async def update_domain_ip(request: Request, domain_id: int = Form(...), new_ip:
 
     # 2. Update Zone File (Simple replacement)
     subdomain = domain.domain_name.replace(".psx", "")
-    
+    if not re.match(r'^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$', subdomain):
+        raise HTTPException(500, "Internal Error: Invalid Domain Name in DB")
+
     try:
         with open(ZONE_FILE, "r") as f:
             lines = f.readlines()
@@ -220,19 +265,30 @@ async def deploy_code(request: Request, name: str = Form(...), repo: str = Form(
     user = get_current_user(request)
     if not user: return RedirectResponse("/login")
     
+    # Validate Repo URL
+    if not re.match(r'^(http|https|git)://', repo):
+        return RedirectResponse("/?error=Invalid repo URL protocol")
+    # Basic check for command injection chars in repo url (though subprocess handles spaces if list is used, flags are risky)
+    if any(c in repo for c in [";", "&", "|", "`", "$", "(", ")"]):
+         return RedirectResponse("/?error=Invalid characters in repo URL")
+
     domain = db.query(models.Domain).filter(models.Domain.id == domain_id, models.Domain.user == user).first()
     if not domain: raise HTTPException(400, "Invalid domain selection")
 
     target_dir = os.path.join(HOSTED_SITES_DIR, domain.domain_name)
+    # Path Traversal Check
+    if not os.path.abspath(target_dir).startswith(os.path.abspath(HOSTED_SITES_DIR)):
+        raise HTTPException(400, "Invalid domain path")
     
     try:
         # Simple deployment: Clone or pull
         # In a real internet, we'd use ssh keys or token-based git auth.
         # Here we assume repo is accessible via HTTP within the network.
         if os.path.exists(target_dir):
+            if os.path.islink(target_dir): raise Exception("Symlink detected")
             subprocess.run(["git", "-C", target_dir, "pull"], check=True, capture_output=True)
         else:
-            subprocess.run(["git", "clone", repo, target_dir], check=True, capture_output=True)
+            subprocess.run(["git", "clone", "--", repo, target_dir], check=True, capture_output=True)
         
         status = "live"
     except Exception as e:
