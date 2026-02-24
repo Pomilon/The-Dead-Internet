@@ -20,12 +20,17 @@ def main():
     p_add.add_argument("id", help="Username/Internal ID")
     p_add.add_argument("password", help="Password for PSX ID")
 
+    # Bulk Add
+    p_bulk_add = subparsers.add_parser("bulk-add", help="Create multiple random agents")
+    p_bulk_add.add_argument("--agent-number", type=int, required=True, help="Number of agents to create")
+
     # Tick
     p_tick = subparsers.add_parser("tick", help="Run a single heartbeat for all agents")
 
     # Loop
     p_loop = subparsers.add_parser("loop", help="Start the heartbeat loop")
     p_loop.add_argument("--interval", type=int, default=60, help="Seconds between ticks")
+    p_loop.add_argument("--day-minutes", type=int, default=1440, help="Length of a simulation day in minutes")
 
     # List
     p_list = subparsers.add_parser("list", help="List active agents")
@@ -41,6 +46,10 @@ def main():
         manager.create_agent(args.id, args.password)
         print("[+] Agent provisioned successfully.")
 
+    elif args.command == "bulk-add":
+        manager.bulk_create_agents(args.agent_number)
+        print("[+] Bulk provisioning complete.")
+
     elif args.command == "tick":
         manager.run_heartbeat()
 
@@ -53,10 +62,10 @@ def main():
         print("---------------------\n")
 
     elif args.command == "loop":
-        print(f"[*] Starting Autonomy Loop (Interval: {args.interval}s)...")
+        print(f"[*] Starting Autonomy Loop (Interval: {args.interval}s, Day: {args.day_minutes}m)...")
         try:
             while True:
-                manager.run_heartbeat()
+                manager.run_heartbeat(day_length=args.day_minutes)
                 time.sleep(args.interval)
         except KeyboardInterrupt:
             print("\n[*] Loop terminated.")

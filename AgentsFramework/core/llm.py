@@ -1,60 +1,77 @@
-import requests
 import json
 import os
+import re
+from litellm import completion
 
 class LLM:
-    def __init__(self, api_key):
+    def __init__(self, model_name="gemini/gemini-2.5-flash-lite", api_key=None):
+        self.model_name = model_name
         self.api_key = api_key
-        # Switch to lite for higher quota in 2026 environment
-        self.url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={self.api_key}"
+        # litellm handles API keys via environment variables usually.
+        # If api_key is provided and valid for the model, it can be passed, 
+        # but for multi-provider it's better to rely on env vars.
+        # We'll set the GEMINI_API_KEY env var if it's not set and we have a key,
+        # just to preserve behavior if users rely on the CLI arg/env var logic from main.py
+        if self.api_key and "gemini" in self.model_name and not os.getenv("GEMINI_API_KEY"):
+             os.environ["GEMINI_API_KEY"] = self.api_key
 
     def chat(self, prompt, system_instruction=None, history=None):
-        payload = {
-            "contents": [],
-            "generationConfig": {
-                "temperature": 0.9,
-                "maxOutputTokens": 2048,
-            }
-        }
+        messages = []
         
         if system_instruction:
-            payload["system_instruction"] = {"parts": [{"text": system_instruction}]}
+            messages.append({"role": "system", "content": system_instruction})
             
         if history:
             for msg in history:
-                role = "model" if msg["role"] == "assistant" else "user"
-                payload["contents"].append({"role": role, "parts": [{"text": msg["content"]}]})
+                messages.append({"role": msg["role"], "content": msg["content"]})
         
-        payload["contents"].append({"role": "user", "parts": [{"text": prompt}]})
+        messages.append({"role": "user", "content": prompt})
         
         try:
-            response = requests.post(self.url, json=payload, timeout=60)
-            response.raise_for_status()
-            data = response.json()
-            return data['candidates'][0]['content']['parts'][0]['text']
+            response = completion(
+                model=self.model_name,
+                messages=messages,
+                temperature=0.9,
+                max_tokens=2048
+            )
+            return response.choices[0].message.content
         except Exception as e:
-            print(f"Gemini API Error: {e}")
-            if 'response' in locals(): print(response.text)
-            return f"Error connecting to Gemini API: {str(e)}"
+            print(f"LLM API Error ({self.model_name}): {e}")
+            return f"Error connecting to LLM API: {str(e)}"
 
     def generate_json(self, prompt, system_instruction=None):
-        payload = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0.7,
-                "response_mime_type": "application/json",
-            }
-        }
-        
+        messages = []
         if system_instruction:
-            payload["system_instruction"] = {"parts": [{"text": system_instruction}]}
-            
+            messages.append({"role": "system", "content": system_instruction})
+        
+        messages.append({"role": "user", "content": prompt})
+        
         try:
-            response = requests.post(self.url, json=payload, timeout=60)
-            response.raise_for_status()
-            data = response.json()
-            text = data['candidates'][0]['content']['parts'][0]['text']
-            return json.loads(text)
+            # Some providers support response_format={"type": "json_object"}, 
+            # but to be generic across Ollama/LlamaCpp/etc, we'll rely on prompt engineering 
+            # and our robust parsing.
+            response = completion(
+                model=self.model_name,
+                messages=messages,
+                temperature=0.7,
+                # response_format={"type": "json_object"}, # Optional: enable if only using providers that support it
+            )
+            text = response.choices[0].message.content
+
+            # Robust JSON parsing: Strip markdown code blocks if present
+            cleaned_text = text.strip()
+            # Remove ```json ... ``` or ``` ... ``` wrappers
+            if cleaned_text.startswith("```"):
+                cleaned_text = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned_text, flags=re.MULTILINE)
+            
+            try:
+                return json.loads(cleaned_text)
+            except json.JSONDecodeError:
+                # Fallback: Find the first { or [ and last } or ] if garbage surrounds the JSON
+                match = re.search(r"(\{.*\}|\[.*\])", cleaned_text, re.DOTALL)
+                if match:
+                    return json.loads(match.group(1))
+                raise
         except Exception as e:
-            print(f"Gemini JSON Error: {e}")
+            print(f"LLM JSON Error ({self.model_name}): {e}")
             return {"error": "Failed to parse JSON", "exception": str(e)}

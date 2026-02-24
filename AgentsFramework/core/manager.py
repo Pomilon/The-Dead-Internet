@@ -3,6 +3,8 @@ import os
 import subprocess
 import time
 import requests
+import random
+import string
 from .agent import BaseAgent
 
 class AgentManager:
@@ -42,12 +44,32 @@ class AgentManager:
         self.agents[id_name] = agent
         return agent
 
+    def bulk_create_agents(self, count):
+        print(f"[*] Starting bulk creation of {count} agents...")
+        
+        for _ in range(count):
+            # Generate random ID
+            suffix = ''.join(random.choices(string.digits, k=4))
+            id_name = f"User_{suffix}"
+            
+            # Ensure uniqueness
+            while id_name in self.agents:
+                 suffix = ''.join(random.choices(string.digits, k=4))
+                 id_name = f"User_{suffix}"
+
+            # Generate random password
+            password = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
+            
+            self.create_agent(id_name, password)
+            # Small delay to avoid race conditions or overload
+            time.sleep(1)
+
     def remove_agent(self, id_name):
         if id_name in self.agents:
             del self.agents[id_name]
             print(f"[*] Agent {id_name} removed from active session.")
 
-    def run_heartbeat(self):
+    def run_heartbeat(self, day_length=1440):
         """Ticks every active agent once."""
         print(f"\n--- HEARTBEAT START ({len(self.agents)} active) ---")
         
@@ -66,7 +88,7 @@ class AgentManager:
         for agent in self.agents.values():
             try:
                 # Pass global context to the heartbeat
-                agent.heartbeat(extra_context=global_context)
+                agent.heartbeat(extra_context=global_context, day_length=day_length)
                 # Small delay to avoid rate limits
                 time.sleep(15)
             except Exception as e:
